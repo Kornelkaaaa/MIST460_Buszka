@@ -1,124 +1,103 @@
-if(OBJECT_ID('RoomAvailability') is not null)
-    drop table RoomAvailability;
-if(OBJECT_ID('Reservation') is not null)
-    drop table Reservation;
-if(OBJECT_ID('Room') is not null)
-    drop table Room;
-if(OBJECT_ID('AppUser') is not null)
-    drop table AppUser;
-if(OBJECT_ID('Sensor') is not null)
-    drop table Sensor;
-if(OBJECT_ID('SensorLog') is not null)
-    drop table SensorLog;
+use [mist460-server-fall26]
 GO
 
-CREATE TABLE AppUser (
-    AppUserID     INT           IDENTITY(1,1) NOT NULL,
-    Email         NVARCHAR(255) NOT NULL,
-    PasswordHash  VARBINARY(64) NOT NULL,
-    FirstName     NVARCHAR(50)  NULL,
-    LastName      NVARCHAR(50)  NULL,
-    UserRole      VARCHAR(10)   NOT NULL CONSTRAINT DF_AppUser_UserRole DEFAULT 'Student',
-    CreatedAt     DATETIME2(0)  NOT NULL CONSTRAINT DF_AppUser_CreatedAt DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT PK_AppUser PRIMARY KEY (AppUserID),
-    CONSTRAINT UK_AppUser_Email UNIQUE (Email),
-    CONSTRAINT CK_AppUser_UserRole CHECK (UserRole IN ('Student', 'Admin')),
-    CONSTRAINT CK_AppUser_Email CHECK (Email LIKE '%_@_%._%')
+-- drop in FK-dependency order
+drop table if exists SensorLog;
+drop table if exists Sensor;
+drop table if exists RoomAvailability;
+drop table if exists Reservation;
+drop table if exists AppUser;
+drop table if exists Room;
+go
+
+create table Room
+(
+    RoomID int identity(1,1),
+    RoomNumber nvarchar(10) not null,
+    Floor int not null,
+    Seats int not null,
+    Whiteboard bit not null, -- for true or false
+    CurrentStatus nvarchar(20) not null default 'Available',
+    constraint CK_Room_CurrentStatus check (CurrentStatus in ('Available', 'Occupied')),
+    constraint PK_Room primary key (RoomID),
+    constraint UQ_Room_RoomNumber unique (RoomNumber)
 );
-GO
 
-CREATE TABLE Room (
-    RoomID        INT          IDENTITY(1,1) NOT NULL,
-    RoomNumber    VARCHAR(10)  NOT NULL,
-    Floor         INT          NOT NULL,
-    Seats         INT          NOT NULL,
-    Whiteboard    BIT          NOT NULL CONSTRAINT DF_Room_Whiteboard DEFAULT 0,
-    CurrentStatus VARCHAR(10)  NOT NULL CONSTRAINT DF_Room_CurrentStatus DEFAULT 'Available',
-    CONSTRAINT PK_Room PRIMARY KEY (RoomID),
-    CONSTRAINT UK_Room_RoomNumber UNIQUE (RoomNumber),
-    CONSTRAINT CK_Room_CurrentStatus CHECK (CurrentStatus IN ('Available', 'In use', 'Closed')),
-    CONSTRAINT CK_Room_Seats CHECK (Seats > 0),
-    CONSTRAINT CK_Room_Floor CHECK (Floor BETWEEN 1 AND 4)
-);
-GO
+go
 
-CREATE TABLE Reservation (
-    ReservationID       INT          IDENTITY(1,1) NOT NULL,
-    AppUserID           INT          NOT NULL,
-    DateTime DATETIME2(0) NOT NULL CONSTRAINT DF_Reservation_DateTime DEFAULT SYSUTCDATETIME(),
-    CheckInDateTime     DATETIME2(0) NULL,
-    CheckOutDateTime    DATETIME2(0) NULL,
-    TotalTime        INT          NOT NULL CONSTRAINT DF_Reservation_TotalTime DEFAULT 0,
-    ReservationStatus   VARCHAR(12)  NOT NULL CONSTRAINT DF_Reservation_Status DEFAULT 'Booked',
-    CONSTRAINT PK_Reservation PRIMARY KEY (ReservationID),
-    CONSTRAINT FK_Reservation_AppUser FOREIGN KEY (AppUserID)
-        REFERENCES AppUser (AppUserID),
-    CONSTRAINT CK_Reservation_Status
-        CHECK (ReservationStatus IN ('Booked', 'CheckedIn', 'Completed', 'Cancelled')),
-    CONSTRAINT CK_Reservation_TotalTime
-        CHECK (TotalTime BETWEEN 0 AND 120 AND TotalTime % 15 = 0),
-    CONSTRAINT CK_Reservation_CheckOutAfterCheckIn
-        CHECK (CheckOutDateTime IS NULL
-               OR (CheckInDateTime IS NOT NULL AND CheckOutDateTime >= CheckInDateTime))
-);
-GO
-
-CREATE TABLE RoomAvailability (
-    RoomAvailabilityID INT      IDENTITY(1,1) NOT NULL,
-    RoomID             INT      NOT NULL,
-    Date           DATE     NOT NULL,
-    StartTime          TIME(0)  NOT NULL,
-    EndTime            TIME(0)  NOT NULL,
-    AvailabilityStatus BIT      NOT NULL CONSTRAINT DF_RoomAvailability_Status DEFAULT 1,
-    ReservationID      INT      NULL,
-    CONSTRAINT PK_RoomAvailability PRIMARY KEY (RoomAvailabilityID),
-    CONSTRAINT FK_RoomAvailability_Room FOREIGN KEY (RoomID)
-        REFERENCES Room (RoomID) ON DELETE CASCADE,
-    CONSTRAINT FK_RoomAvailability_Reservation FOREIGN KEY (ReservationID)
-        REFERENCES Reservation (ReservationID),
-
-    CONSTRAINT UK_RoomAvailability_Slot UNIQUE (RoomID, Date, StartTime),
-
-    CONSTRAINT CK_RoomAvailability_QuarterHour
-        CHECK (DATEDIFF(MINUTE, StartTime, EndTime) = 15
-               AND DATEPART(MINUTE, StartTime) % 15 = 0
-               AND DATEPART(SECOND, StartTime) = 0),
-
-    CONSTRAINT CK_RoomAvailability_StatusMatchesReservation
-        CHECK ((ReservationID IS NULL     AND AvailabilityStatus = 1)
-            OR (ReservationID IS NOT NULL AND AvailabilityStatus = 0))
-);
-GO
--- we need indexes on RoomAvailability table to improve performance of queries that filter by Date, StartTime, and AvailabilityStatus, as well as queries that join with Reservation table on ReservationID.
-CREATE INDEX IX_RoomAvailability_Search
-    ON RoomAvailability (Date, StartTime, AvailabilityStatus)
-    INCLUDE (RoomID, EndTime);
-GO
-
-CREATE INDEX IX_RoomAvailability_ReservationID
-    ON RoomAvailability (ReservationID);
-GO
-
-CREATE INDEX IX_Reservation_AppUserID
-    ON Reservation (AppUserID);
-GO
-
--- we need sencor table to store data from sensors, we can use this data to improve the room availability and reservation system, for example we can use the data from sensors to detect if a room is occupied or not, and update the room availability accordingly.
 CREATE TABLE Sensor (
-    SensorLogID INT IDENTITY(1,1) NOT NULL,
-    RoomID       INT NOT NULL,
-    InstalDate DATETIME2(0) NOT NULL CONSTRAINT DF_SensorData_InstalDate DEFAULT SYSUTCDATETIME(),
-   
+    SensorID     int identity(1,1),
+    SensorName       nvarchar(50),   -- e.g. 'LD2410C'
+    TransmitterName  nvarchar(50),   -- e.g. 'ESP32-S3-WROOM-1'
+    MacAddress       nvarchar(17), -- e.g. '00:1A:7D:DA:71:13'
+    DateInstalled     date NOT NULL DEFAULT getdate(),
+    DateRemoved       date NULL,
+    RoomID     INT,    -- which room this device watches
+    constraint PK_Sensor primary key (SensorID),
+    constraint FK_Sensor_Room foreign key (RoomID) references Room(RoomID),
+    constraint UQ_Sensor_MacAddress unique (MacAddress)
 );
 
--- we need sensro log table
-CREATE TABLE SensorLog (
-    SensorLogID INT IDENTITY(1,1) NOT NULL,
-    SensorID    INT NOT NULL,
-    EntryDataTime DATETIME2(0) NOT NULL CONSTRAINT DF_SensorLog_LogDateTime DEFAULT SYSUTCDATETIME(),
-    OccupancyStatus BIT NOT NULL,
-    ExitDataTime DATETIME2(0) NULL,
-    CONSTRAINT PK_SensorLog PRIMARY KEY (SensorLogID),
-    CONSTRAINT FK_SensorLog_Sensor FOREIGN KEY (SensorID)
-        REFERENCES Sensor (SensorLogID) ON DELETE CASCADE
+go
+
+create table SensorLog
+(
+    SensorLogID int identity(1,1),
+    SensorID int not null,
+    EventType nvarchar(5) not null, -- e.g. 'Enter', 'Exit'
+    EventDateTime datetime2 not null,
+    constraint PK_SensorLog primary key (SensorLogID),
+    constraint CK_SensorLog_EventType check (EventType in ('Enter', 'Exit')),
+    constraint FK_SensorLog_Sensor foreign key (SensorID) references Sensor(SensorID)
+)
+
+go
+
+create table AppUser
+(
+    AppUserID int identity(1,1),
+    FirstName nvarchar(50) not null,
+    LastName nvarchar(50) not null,
+    AppUserEmail nvarchar(100) not null unique,
+    AppUserPassword nvarchar(200) not null,
+    AppUserRole nvarchar(20) not null default 'User', -- 'Admin' or 'User'
+    constraint CK_AppUser_Role check (AppUserRole in ('Admin', 'User')),
+    constraint PK_AppUser primary key (AppUserID)
+);
+
+go
+
+create table Reservation
+(
+    ReservationID int identity(1,1),
+    AppUserID int not null,
+    ReservationDateTime datetime2 not null default getdate(), -- when the reservation was made
+    CheckInDateTime datetime2 null,
+    CheckOutDateTime datetime2 null,
+    TotalTimeReserved int NOT NULL DEFAULT 0, -- total reserved time -- as datediff(minute, CheckInDateTime, CheckOutDateTime), -- minutes, computed
+    ReservationStatus nvarchar(20) not null default 'Reserved',
+    constraint PK_Reservation primary key (ReservationID),
+    constraint CK_Reservation_Status check (ReservationStatus in ('Reserved', 'CheckedIn', 'CheckedOut', 'Cancelled')),
+    constraint FK_Reservation_AppUser foreign key (AppUserID) references AppUser(AppUserID),
+    constraint CK_Reservation_CheckOutAfterCheckIn check (CheckOutDateTime is null or CheckOutDateTime >= CheckInDateTime),
+    constraint CK_Reservation_TotalTime check (TotalTimeReserved <= 120) -- maximum 2 hours
+);
+
+go
+
+create table RoomAvailability
+(
+    RoomAvailabilityID int identity(1,1) primary key,
+    RoomID int not null,
+    AvailableDate date not null,
+    StartTime time not null,
+    EndTime time not null,
+    AvailabilityStatus nvarchar(20) not null default 'Available'
+        constraint CK_RoomAvailability_Status check (AvailabilityStatus in ('Available', 'Reserved')),
+    ReservationID int null, -- null until this 15-min slot is included in a reservation
+    constraint FK_RoomAvailability_Room foreign key (RoomID) references Room(RoomID),
+    constraint FK_RoomAvailability_Reservation foreign key (ReservationID) references Reservation(ReservationID),
+    constraint UQ_RoomAvailability_Slot unique (RoomID, AvailableDate, StartTime),
+    constraint CK_RoomAvailability_TimeOrder check (EndTime > StartTime),
+    constraint CK_RoomAvailability_15MinSlot check (datediff(minute, StartTime, EndTime) = 15) -- atomic 15-minute increments
 );

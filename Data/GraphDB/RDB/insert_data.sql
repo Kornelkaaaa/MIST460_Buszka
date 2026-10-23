@@ -1,112 +1,164 @@
-DELETE FROM RoomAvailability;
-DELETE FROM Reservation;
-DELETE FROM Room;
-DELETE FROM AppUser;
-GO
 
-SET IDENTITY_INSERT AppUser ON;
+insert into Room (RoomNumber, Floor, Seats, Whiteboard) values
+('REH 4213', 4, 4, 1),
+('REH 4225', 4, 6, 0),
+('REH 5213', 5, 4, 1),
+('REH 5225', 5, 6, 0);
 
-INSERT INTO AppUser (AppUserID, Email, PasswordHash, FirstName, LastName, UserRole) VALUES
-    (1, 'miafrate@mix.wvu.edu',   0x01, 'Michael',  'Iafrate',   'Student'),
-    (2, 'ccarter@mix.wvu.edu',    0x01, 'Carter',   'Reed',      'Student'),
-    (3, 'dwhitfield@mix.wvu.edu', 0x01, 'Dana',     'Whitfield', 'Student'),
-    (4, 'praman@mix.wvu.edu',     0x01, 'Priya',    'Raman',     'Student'),
-    (5, 'jbennett@mail.wvu.edu',  0x01, 'Jordan',   'Bennett',   'Admin');
+go
 
-SET IDENTITY_INSERT AppUser OFF;
-DBCC CHECKIDENT ('AppUser', RESEED) WITH NO_INFOMSGS;
-GO
+insert into Sensor (SensorName, TransmitterName, RoomID) values
+('LD2410C', 'ESP32-S3-WROOM-1', 1),
+('LD2410C', 'ESP32-S3-WROOM-1', 2),
+('LD2410C', 'ESP32-S3-WROOM-1', 3),
+('LD2410C', 'ESP32-S3-WROOM-1', 4);
 
-SET IDENTITY_INSERT Room ON;
 
-INSERT INTO Room (RoomID, RoomNumber, Floor, Seats, Whiteboard, CurrentStatus) VALUES
-    (1, '130', 1,  4, 1, 'Available'),
-    (2, '225', 2,  6, 1, 'Available'),
-    (3, '230', 2,  4, 0, 'Available'),
-    (4, '335', 3,  8, 1, 'Available'),
-    (5, '450', 4, 12, 1, 'Available');
+go
 
-SET IDENTITY_INSERT Room OFF;
-DBCC CHECKIDENT ('Room', RESEED) WITH NO_INFOMSGS;
-GO
 
-DECLARE @Today DATE = CAST(SYSDATETIME() AS DATE);
+insert into AppUser (FirstName, LastName, AppUserEmail, AppUserPassword, AppUserRole) values
+('Alice', 'Smith', 'alice.smith@school.edu', 'hashed_password_1', 'Admin'),
+('Bob', 'Johnson', 'bob.johnson@school.edu', 'hashed_password_2', 'User'),
+('Charlie', 'Brown', 'charlie.brown@school.edu', 'hashed_password_3', 'User'),
+('David', 'Williams', 'david.williams@school.edu', 'hashed_password_4', 'User');
 
-WITH SlotNo AS (
-    SELECT TOP (5) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS N
-    FROM sys.all_objects
-)
-INSERT INTO RoomAvailability (RoomID, Date, StartTime, EndTime, AvailabilityStatus)
-SELECT
-    r.RoomID,
-    @Today,
-    CAST(DATEADD(MINUTE, 15 *  s.N,      CAST('08:00:00' AS TIME(0))) AS TIME(0)),
-    CAST(DATEADD(MINUTE, 15 * (s.N + 1), CAST('08:00:00' AS TIME(0))) AS TIME(0)),
-    1
-FROM Room r
-CROSS JOIN SlotNo s;
 
-SET IDENTITY_INSERT Reservation ON;
+go
 
-INSERT INTO Reservation (ReservationID, AppUserID, DateTime, CheckInDateTime, CheckOutDateTime, TotalTime, ReservationStatus) VALUES
-    (1,  1, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (2,  2, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (3,  1, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (4,  3, SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 45, 'CheckedIn'),
-    (5,  4, SYSUTCDATETIME(), NULL, NULL, 30, 'Cancelled'),
-    (6,  5, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (7,  2, SYSUTCDATETIME(), DATEADD(HOUR, -3, SYSUTCDATETIME()),
-                              DATEADD(HOUR, -2, SYSUTCDATETIME()), 30, 'Completed'),
-    (8,  3, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (9,  4, SYSUTCDATETIME(), NULL, NULL, 30, 'Booked'),
-    (10, 1, SYSUTCDATETIME(), NULL, NULL, 15, 'Booked');
 
-SET IDENTITY_INSERT Reservation OFF;
-DBCC CHECKIDENT ('Reservation', RESEED) WITH NO_INFOMSGS;
+create or alter PROCEDURE procCreateRoomAvailabilityForOneDay
+    @CurrentDate date
+as
+begin
+-- generate 15-minute RoomAvailability slots from 8 AM to 8 PM on current date for every room
+    declare @AvailableDate date = @CurrentDate;
+    declare @SlotStart time;
+    declare @RoomID int;
+    declare @NumberOfRooms int, @Counter int;
+    set @NumberOfRooms = (select count(*) from Room);
+    set @RoomID = 1;
+    set @Counter = 0;
 
-UPDATE RoomAvailability SET ReservationID = 1, AvailabilityStatus = 0
-WHERE RoomID = 1 AND Date = @Today
-  AND StartTime >= '08:00:00' AND StartTime < '08:30:00';
+    while @Counter < @NumberOfRooms -- loop through each room (1, 2, 3, 4 )
+    begin
+        set @SlotStart = '08:00:00';
+        while @SlotStart < '20:00:00' -- loop through each 15-minute slot (8:00, 8:15, 8:30, ..., 19:45)
+        begin
+            insert into RoomAvailability (RoomID, AvailableDate, StartTime, EndTime, AvailabilityStatus)
+            values (@RoomID, @AvailableDate, @SlotStart, dateadd(minute, 15, @SlotStart), 'Available');
 
-UPDATE RoomAvailability SET ReservationID = 2, AvailabilityStatus = 0
-WHERE RoomID = 2 AND Date = @Today
-  AND StartTime >= '08:00:00' AND StartTime < '08:30:00';
+            set @SlotStart = dateadd(minute, 15, @SlotStart);
+        end
+        set @RoomID = @RoomID + 1;
+        set @Counter = @Counter + 1;
+    end
 
-UPDATE RoomAvailability SET ReservationID = 3, AvailabilityStatus = 0
-WHERE RoomID = 1 AND Date = @Today
-  AND StartTime >= '08:30:00' AND StartTime < '09:00:00';
+end;
 
-UPDATE RoomAvailability SET ReservationID = 4, AvailabilityStatus = 0
-WHERE RoomID = 3 AND Date = @Today
-  AND StartTime >= '08:00:00' AND StartTime < '08:45:00';
+/*
+declare @currentDate date = getdate();
+print @currentDate;
+execute procCreateRoomAvailabilityForOneDay @currentDate;
+select * from RoomAvailability;
+*/
 
-UPDATE RoomAvailability SET ReservationID = 6, AvailabilityStatus = 0
-WHERE RoomID = 4 AND Date = @Today
-  AND StartTime >= '08:00:00' AND StartTime < '08:30:00';
+go
 
-UPDATE RoomAvailability SET ReservationID = 7, AvailabilityStatus = 0
-WHERE RoomID = 5 AND Date = @Today
-  AND StartTime >= '08:30:00' AND StartTime < '09:00:00';
+-- Create room availability for the next 7 days
+create or alter PROCEDURE procCreateRoomAvailabilityForNext7Days
+AS
+begin
+    declare @numberOfDays int = 0;
+    declare @currentDate date = getdate(); -- dateadd(day, 1, getdate()); -- start from tomorrow
+    while @numberOfDays < 7
+    begin
+        execute procCreateRoomAvailabilityForOneDay @currentDate;
+        set @numberOfDays = @numberOfDays + 1;
+        set @currentDate = dateadd(day, 1, @currentDate);
+    end
+end
+-- execute procCreateRoomAvailabilityForNext7Days;
+-- select * from RoomAvailability;
 
-UPDATE RoomAvailability SET ReservationID = 8, AvailabilityStatus = 0
-WHERE RoomID = 2 AND Date = @Today
-  AND StartTime >= '08:45:00' AND StartTime < '09:15:00';
 
-UPDATE RoomAvailability SET ReservationID = 9, AvailabilityStatus = 0
-WHERE RoomID = 4 AND Date = @Today
-  AND StartTime >= '08:30:00' AND StartTime < '09:00:00';
+go
 
-UPDATE RoomAvailability SET ReservationID = 10, AvailabilityStatus = 0
-WHERE RoomID = 5 AND Date = @Today
-  AND StartTime >= '09:00:00' AND StartTime < '09:15:00';
 
-UPDATE Room SET CurrentStatus = 'In use' WHERE RoomID = 3;
-GO
+-- Create room availability for between the specified start and end dates
+-- create or alter PROCEDURE procCreateRoomAvailabilityBetweenDates
 
-SELECT 'AppUser' AS TableName, COUNT(*) AS RowTotal FROM AppUser
-UNION ALL SELECT 'Room',              COUNT(*) FROM Room
-UNION ALL SELECT 'Reservation',       COUNT(*) FROM Reservation
-UNION ALL SELECT 'RoomAvailability',  COUNT(*) FROM RoomAvailability
-UNION ALL SELECT '  ...booked slots', COUNT(*) FROM RoomAvailability WHERE AvailabilityStatus = 0
-UNION ALL SELECT '  ...free slots',   COUNT(*) FROM RoomAvailability WHERE AvailabilityStatus = 1;
-GO
+create or alter PROCEDURE procCreateRoomAvailabilityBetweenDates
+    @StartDate date,
+    @EndDate date
+AS
+begin
+    declare @numberOfDays int, @counter int;
+    set @numberOfDays = datediff(day, @StartDate, @EndDate) + 1; -- include end date
+    declare @currentDate date; 
+    set @currentDate = @StartDate;
+    set @counter = 0; 
+    while @counter < @numberOfDays
+    begin
+        execute procCreateRoomAvailabilityForOneDay @currentDate;
+        set @counter = @counter + 1;
+        set @currentDate = dateadd(day, 1, @currentDate);
+    end
+end
+
+-- execute procCreateRoomAvailabilityBetweenDates '2026-10-19', '2026-10-22';
+-- select * from RoomAvailability;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+declare @CurrentDate date = getdate();
+execute procCreateRoomAvailabilityForOneDay @CurrentDate;
+select * from RoomAvailability
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+-- sample reservation: AppUser 1 books room 401 (4th floor) on 8/28 from 10:00 to 11:00
+declare @NewReservationID int;
+
+insert into Reservation (AppUserID, ReservationDateTime, ReservationStatus)
+values (1, getdate(), 'Reserved');
+
+set @NewReservationID = scope_identity();
+
+update RoomAvailability
+set AvailabilityStatus = 'Reserved', ReservationID = @NewReservationID
+where RoomID = (select RoomID from Room where RoomNumber = '401')
+    and AvailableDate = '2026-08-28'
+    and StartTime >= '10:00:00'
+    and EndTime <= '11:00:00';
+
+update Room
+set CurrentStatus = 'In Use'
+where RoomNumber = '401';
+
+go
+*/
